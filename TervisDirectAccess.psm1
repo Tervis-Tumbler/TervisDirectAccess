@@ -4,8 +4,10 @@
     )
     Invoke-ClusterApplicationProvision -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
     $Nodes = Get-TervisClusterApplicationNode -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
-    $Nodes | Add-ExternalFacingNIC
+    # $Nodes | Add-ExternalFacingNIC
     $Nodes | Set-DirectAccessConfiguration
+    $Nodes | Install-DirectAccessCertificates
+    $Nodes | Enable-DirectAccessCoexistenceWithThirdPartyClients
     $Nodes | Add-DirectAccessDnsRecords
 }
 
@@ -16,7 +18,8 @@ function Add-ExternalFacingNIC {
     Begin {
         $ADDomain = Get-ADDomain
         $PDCEmulator = $ADDomain | Select -ExpandProperty PDCEmulator
-        $DHCPScope = Read-Host "What is the DHCP Scope ID for the external facing NIC?" #This is temporary
+        $DHCPScope = get-dhcpserverv4scope -ComputerName $(Get-DhcpServerInDC | select -First 1 -ExpandProperty DNSName) | 
+            where name -match ^management | Select -ExpandProperty ScopeId
     }
     Process {
         $NetworkAdapters = Invoke-Command -ComputerName $ComputerName -ScriptBlock {Get-NetAdapter}
@@ -86,6 +89,44 @@ function Add-DirectAccessDnsRecords {
         }
         if (-NOT (Resolve-DnsName $DirectAccessWebProbeDnsHostName)) {
             Add-DnsServerResourceRecordA -ComputerName $PDCEmulator -Name $DirectAccessWebProbeDnsHostName -ZoneName $DNSZone -IPv4Address $InternalIPAddress
+        }
+    }
+}
+
+function Install-DirectAccessCertificates {
+    param (
+        [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
+    )
+    Begin {
+
+    }
+    Process {
+        # certificates for IP-HTTPS
+        # netsh http add ssl ipport=0.0.0.0:443 certhash=<use the thumbprint from wildcard cert> appid=<use the appid from the binding>
+    }
+}
+
+function Enable-DirectAccessCoexistenceWithThirdPartyClients {
+    param (
+        [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
+    )
+    Begin {
+        [string]$ThirdPartyVpnClientCoexistenceRegistryPath = "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\services\NlaSvc\Parameters\ShowDomainEndpointInterfaces"
+        [string]$ThirdPartySplitTunnelRegistryPath = "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\services\NlaSvc\Parameters\Internet"
+    }
+    Process {
+        if (-NOT (Invoke-Command -ComputerName $computername -ScriptBlock {Get-ItemProperty -Path $Using:ThirdPartyVpnClientCoexistenceRegistryPath -Name "ShowDomainEndpointInterfaces" -ErrorAction SilentlyContinue})) {
+            Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+                New-Item -Path $Using:ThirdPartyVpnClientCoexistenceRegistryPath
+                New-ItemProperty -Path $Using:ThirdPartyVpnClientCoexistenceRegistryPath -Name "ShowDomainEndpointInterfaces" -Value 1 -PropertyType DWORD -Force
+            }
+        }
+
+        if (-NOT (Invoke-Command -ComputerName $computername -ScriptBlock {Get-ItemProperty -Path $Using:ThirdPartySplitTunnelRegistryPath -Name "EnableNoGatewayLocationDetection" -ErrorAction SilentlyContinue})) {
+            Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+                New-Item -Path $Using:ThirdPartySplitTunnelRegistryPath
+                New-ItemProperty -Path $Using:ThirdPartySplitTunnelRegistryPath -Name "EnableNoGatewayLocationDetection" -Value 1 -PropertyType DWORD -Force
+            }
         }
     }
 }
