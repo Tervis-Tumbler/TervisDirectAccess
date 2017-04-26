@@ -4,11 +4,25 @@
     )
     Invoke-ClusterApplicationProvision -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
     $Nodes = Get-TervisClusterApplicationNode -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
+    $Nodes | Enable-CredSSPDoubleHop
     # $Nodes | Add-ExternalFacingNIC
-    $Nodes | Set-DirectAccessConfiguration
-    $Nodes | Install-DirectAccessCertificates
-    $Nodes | Enable-DirectAccessCoexistenceWithThirdPartyClients
     $Nodes | Add-DirectAccessDnsRecords
+    $Nodes | Set-DirectAccessConfiguration
+    # $Nodes | Install-DirectAccessCertificates
+    $Nodes | Enable-DirectAccessCoexistenceWithThirdPartyClients
+    # $Nodes | Add-DirectAccessDnsRecords
+}
+
+function Enable-CredSSPDoubleHop {
+    param (
+        [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
+    )
+    Process{
+        Enable-WSManCredSSP –Role Client –DelegateComputer $ComputerName -Force
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            Enable-WSManCredSSP –Role Server -Force
+        }
+    }
 }
 
 function Add-ExternalFacingNIC {
@@ -41,31 +55,55 @@ function Add-ExternalFacingNIC {
 }
 
 function Set-DirectAccessConfiguration {
+    #Requires -Module RemoteAccess
+    [cmdletbinding()]
     param (
-        [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
+        [Parameter(ValueFromPipelineByPropertyName)]$ComputerName,
+        $Credential = [System.Management.Automation.PSCredential]::Empty
     )
     Begin {
         $ADDomain = Get-ADDomain
         $ADDNSRoot = $ADDomain | Select -ExpandProperty DNSRoot
-        $ADNetBIOSName = $ADDomain | Select -ExpandProperty NetBIOSName
+        $ADNetBIOSName = ($ADDomain | Select -ExpandProperty NetBIOSName).ToLower()
         $DirectAccessServerGpoName = $ADDNSRoot + '\DirectAccess Server Settings'
         $DirectAccessClientGpoName = $ADDNSRoot + '\DirectAccess Client Settings'
+        $DirectAccessClientGroupName = $ADDNSRoot + '\Direct Access Client Computers'
+        $DomainComputersGroup = $ADDNSRoot + '\Domain Computers'
         $DirectAccessConnectToDomain = 'DirectAccess.' + $ADNetBIOSName + '.com'
-        $DirectAccessNlsUrl = 'https://nls.' + $ADNetBIOSName + '.com/'
+        $DirectAccessNlsDomain = 'nls.' + $ADNetBIOSName + '.com'
+        $DirectAccessNlsUrl = 'https://' + $DirectAccessNlsDomain + '/'
         $DirectAccessCorporateResources = 'HTTP:http://directaccess-WebProbeHost.' + $ADNetBIOSName + '.com'
     }
     Process {
-        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
-            if ((Get-RemoteAccess).DAStatus -eq 'Uninstalled') {
-                Install-RemoteAccess -Force -PassThru -ServerGpoName $Using:DirectAccessServerGpoName -ClientGpoName $Using:DirectAccessClientGpoName -DAInstallType 'FullInstall' -InternetInterface 'Internet' -InternalInterface 'Internal' -ConnectToAddress $Using:DirectAccessConnectToDomain -NlsUrl $Using:DirectAccessNlsUrl
-            }
-            $certs = Get-ChildItem Cert:\LocalMachine\Root  
-            $IPsecRootCert = $certs | Where-Object {$_.Subject -Match "INF-DirectAcc"}  
-            Set-DAServer -IPsecRootCertificate $IPsecRootCert 
+        $RemoteAccessConfiguration = Get-RemoteAccess -ComputerName $ComputerName
+        If (($RemoteAccessConfiguration).DAStatus -eq 'Uninstalled') {
+            $NIC = Invoke-Command -ComputerName $ComputerName -ScriptBlock {(Get-NetAdapter).Name}
+            Install-RemoteAccess -Force -PassThru -ServerGpoName $DirectAccessServerGpoName -ClientGpoName $DirectAccessClientGpoName -DAInstallType 'FullInstall' -InternetInterface $NIC -InternalInterface $NIC -ConnectToAddress $DirectAccessConnectToDomain -NlsUrl $DirectAccessNlsUrl -ComputerName $ComputerName
+            Add-DAClient -SecurityGroupNameList @($DirectAccessClientGroupName) -ComputerName $ComputerName
+            Remove-DAClient -SecurityGroupNameList @($DomainComputersGroup) -ComputerName $ComputerName
+        }
 
-            Set-DAClient -OnlyRemoteComputers 'Disabled' -Downlevel 'Enabled'
+        $IPsecRootCert = Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            Get-ChildItem Cert:\LocalMachine\Root | Where-Object {$_.Subject -Match "CN=tervis"} 
+        }
+        Set-DAServer -IPsecRootCertificate $IPsecRootCert -ComputerName $ComputerName
 
-            Set-DAClientExperienceConfiguration -FriendlyName 'Tervis DirectAccess Connection' -PreferLocalNamesAllowed $False -PolicyStore $Using:DirectAccessClientGpoName -CorporateResources @($Using:DirectAccessCorporateResources)
+        if (-NOT (($RemoteAccessConfiguration).ClientSecurityGroupNameList -eq $DirectAccessClientGroupName)) {
+            Add-DAClient -SecurityGroupNameList @($DirectAccessClientGroupName) -ComputerName $ComputerName
+            Remove-DAClient -SecurityGroupNameList @($DomainComputersGroup) -ComputerName $ComputerName
+        }
+
+        if (($RemoteAccessConfiguration).Downlevel -eq 'Disabled') {
+            Set-DAClient -Downlevel Enabled -ComputerName $ComputerName
+        }
+
+        if (($RemoteAccessConfiguration).OnlyRemoteComputers -eq 'Enabled') {
+            Set-DAClient -OnlyRemoteComputers Disabled -ComputerName $ComputerName
+        }
+
+        $DAClientExperienceConfiguration = Get-DAClientExperienceConfiguration -PolicyStore $DirectAccessClientGpoName
+        if (-NOT (($DAClientExperienceConfiguration).FriendlyName -eq 'Tervis DirectAccess Connection')) {
+            Set-DAClientExperienceConfiguration -FriendlyName 'Tervis DirectAccess Connection' -PreferLocalNamesAllowed $False -PolicyStore $Using:DirectAccessClientGpoName -CorporateResources @("$Using:DirectAccessCorporateResources")
         }
     }
 }
@@ -76,19 +114,28 @@ function Add-DirectAccessDnsRecords {
     )
     Begin {
         $ADDomain = Get-ADDomain
-        $ADNetBIOSName = $ADDomain | Select -ExpandProperty NetBIOSName
+        $ADNetBIOSName = ($ADDomain | Select -ExpandProperty NetBIOSName).ToLower()
         $PDCEmulator = $ADDomain | Select -ExpandProperty PDCEmulator
-        $DirectAccessNetWorkLocationServerDnsHostName = 'nls.' + $ADNetBIOSName + '.com'
-        $DirectAccessWebProbeDnsHostName = 'directaccess-WebProbeHost.' + $ADNetBIOSName + '.com'
+        $DirectAccessNetWorkLocationServerDnsHostName = 'nls'
+        $DirectAccessNetWorkLocationServerDnsAddress = 'nls.' + $ADNetBIOSName + '.com'
+        $DirectAccessConnectToHostName = 'directaccess'
+        $DirectAccessConnectToAddress = 'DirectAccess.' + $ADNetBIOSName + '.com'
+        $DirectAccessWebProbeDnsHostName = 'directaccess-WebProbeHost'
+        $DirectAccessWebProbeDnsAddress = 'directaccess-WebProbeHost.' + $ADNetBIOSName + '.com'
         $DNSZone = Get-DnsServerZone -ComputerName $PDCEmulator | where {$_.IsReverseLookupZone -eq $false -and $_.DynamicUpdate -eq "None"} | Select -ExpandProperty ZoneName
     }
     Process {
         $InternalIPAddress = Invoke-Command -ComputerName $ComputerName -ScriptBlock {Get-NetAdapter | Get-NetIPAddress | Where AddressFamily -eq IPv4 | Select -ExpandProperty IPAddress}
-        if (-NOT (Resolve-DnsName $DirectAccessNetWorkLocationServerDnsHostName)) {
+        <#
+        if (-NOT (Resolve-DnsName $DirectAccessNetWorkLocationServerDnsAddress -Server $PDCEmulator -ErrorAction SilentlyContinue)) {
             Add-DnsServerResourceRecordA -ComputerName $PDCEmulator -Name $DirectAccessNetWorkLocationServerDnsHostName -ZoneName $DNSZone -IPv4Address $InternalIPAddress
         }
-        if (-NOT (Resolve-DnsName $DirectAccessWebProbeDnsHostName)) {
+        #>
+        if (-NOT (Resolve-DnsName $DirectAccessWebProbeDnsAddress -Server $PDCEmulator -ErrorAction SilentlyContinue)) {
             Add-DnsServerResourceRecordA -ComputerName $PDCEmulator -Name $DirectAccessWebProbeDnsHostName -ZoneName $DNSZone -IPv4Address $InternalIPAddress
+        }
+        if (-NOT (Resolve-DnsName $DirectAccessConnectToAddress -Server $PDCEmulator -ErrorAction SilentlyContinue)) {
+            Add-DnsServerResourceRecordA -ComputerName $PDCEmulator -Name $DirectAccessConnectToHostName -ZoneName $DNSZone -IPv4Address $InternalIPAddress
         }
     }
 }
