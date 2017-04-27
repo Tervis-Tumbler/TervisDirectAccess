@@ -145,11 +145,30 @@ function Install-DirectAccessCertificates {
         [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
     )
     Begin {
-
+        $WildcardCredential = ConvertTo-SecureString (Get-PasswordstateCredential -PasswordID '2570' -AsPlainText).Password -AsPlainText -Force
+        if (-NOT (Test-Path "C:\Temp")) {
+            New-Item "C:\Temp" -ItemType Directory
+        }
+        Get-PasswordstateDocument -DocumentID '3' -FilePath "C:\Temp\Wildcard.pfx"
     }
     Process {
-        # certificates for IP-HTTPS
-        # netsh http add ssl ipport=0.0.0.0:443 certhash=<use the thumbprint from wildcard cert> appid=<use the appid from the binding>
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+            if (-NOT (Test-Path "C:\Temp")) {
+                New-Item "C:\Temp" -ItemType Directory
+            }
+        }
+        if (-NOT (Invoke-Command -ComputerName $ComputerName -ScriptBlock {Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.FriendlyName -eq '*.tervis.com' -and $_.Issuer -match 'CN=Go Daddy'}})) {
+            Copy-Item "C:\Temp\Wildcard.pfx" -Destination "\\$ComputerName\C$\Temp\Wildcard.pfx"
+            Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+                Import-PfxCertificate -FilePath "C:\Temp\Wildcard.pfx" -Password $Using:WildcardCredential -CertStoreLocation "cert:\localMachine\my"
+                $cert = Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.FriendlyName -eq '*.tervis.com' -and $_.Issuer -match 'CN=Go Daddy'}
+                Set-RemoteAccess -SslCertificate $cert
+                Remove-Item "C:\Temp\Wildcard.pfx" -Confirm:$false
+            }
+        }
+    }
+    End {
+        Remove-Item "C:\Temp\Wildcard.pfx" -Confirm:$false
     }
 }
 
