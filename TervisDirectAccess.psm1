@@ -8,9 +8,8 @@
     # $Nodes | Add-ExternalFacingNIC
     $Nodes | Add-DirectAccessDnsRecords
     $Nodes | Set-DirectAccessConfiguration
-    # $Nodes | Install-DirectAccessCertificates
+    $Nodes | Install-DirectAccessCertificates
     $Nodes | Enable-DirectAccessCoexistenceWithThirdPartyClients
-    # $Nodes | Add-DirectAccessDnsRecords
 }
 
 function Enable-CredSSPDoubleHop {
