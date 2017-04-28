@@ -163,6 +163,7 @@ function Install-DirectAccessCertificates {
                 $cert = Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.FriendlyName -eq '*.tervis.com' -and $_.Issuer -match 'CN=Go Daddy'}
                 Set-RemoteAccess -SslCertificate $cert
                 Remove-Item "C:\Temp\Wildcard.pfx" -Confirm:$false
+                Restart-Service -Name iphlpsvc -Force
             }
         }
     }
