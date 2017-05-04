@@ -6,6 +6,7 @@
     $Nodes = Get-TervisClusterApplicationNode -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
     $Nodes | Enable-CredSSPDoubleHop
     # $Nodes | Add-ExternalFacingNIC
+    $Nodes | Set-InternalNetworkConfiguration
     $Nodes | Add-DirectAccessDnsRecords
     $Nodes | Set-DirectAccessConfiguration
     $Nodes | Install-DirectAccessCertificates
@@ -193,6 +194,46 @@ function Enable-DirectAccessCoexistenceWithThirdPartyClients {
                 New-Item -Path $Using:ThirdPartySplitTunnelRegistryPath
                 New-ItemProperty -Path $Using:ThirdPartySplitTunnelRegistryPath -Name "EnableNoGatewayLocationDetection" -Value 1 -PropertyType DWORD -Force
             }
+        }
+    }
+}
+
+function Set-InternalNetworkConfiguration {
+    param (
+        [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
+    )
+    Begin {
+        $DhcpScopes = Get-DhcpServerv4Scope -ComputerName $(Get-DhcpServerInDC | select -First 1 -ExpandProperty DNSName)
+    }
+    Process {
+        $CimSession = New-CimSession -ComputerName $ComputerName
+        $CurrentRoutes = Get-NetRoute -CimSession $CimSession
+        foreach ($DhcpScope in $DhcpScopes) {
+            $CidrBits = Convert-SubnetMaskToCidr -SubnetMask ($DhcpScope).SubnetMask.ToString()
+            $CurrentNicConfiguration = Get-NetIPConfiguration `
+                -InterfaceAlias $(Get-NetAdapter -CimSession $CimSession).Name `
+                -CimSession $CimSession
+            If (-NOT ($CurrentRoutes | where DestinationPrefix -Match ($DhcpScope).ScopeID.ToString())) {
+                $DestinationPrefix = ($DhcpScope).ScopeID.ToString() + '/' + $CidrBits
+                [string]$NextHop = ($CurrentNicConfiguration).IPv4DefaultGateway.NextHop
+                New-NetRoute `
+                    -DestinationPrefix $DestinationPrefix `
+                    -NextHop $NextHop `
+                    -InterfaceAlias ($CurrentNicConfiguration).InterfaceAlias `
+                    -CimSession $CimSession
+            }
+        }
+        Set-DnsClientServerAddress `
+            -InterfaceAlias ($CurrentNicConfiguration).InterfaceAlias `
+            -ServerAddresses ($CurrentNicConfiguration).DNSServer.ServerAddresses `
+            -CimSession $CimSession
+        Invoke-Command -ComputerName $ComputerName -AsJob -ScriptBlock {
+            $IPConfiguration = Get-WmiObject win32_networkadapterconfiguration | where Description -eq ($Using:CurrentNicConfiguration).InterfaceDescription
+            $IPAddress = ($Using:CurrentNicConfiguration).IPv4Address.IPAddress
+            $SubnetMask = ($WMI).IPSubnet[0]
+            $DefaultGateway = ($Using:CurrentNicConfiguration).IPv4DefaultGateway.NextHop
+            $IPConfiguration.EnableStatic($IPAddress, $SubnetMask)
+            $IPConfiguration.SetGateways($DefaultGateway, 1)
         }
     }
 }
