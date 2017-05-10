@@ -4,7 +4,6 @@
     )
     Invoke-ClusterApplicationProvision -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
     $Nodes = Get-TervisClusterApplicationNode -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
-    $Nodes | Enable-CredSSPDoubleHop
     # $Nodes | Add-ExternalFacingNIC
     $Nodes | Set-InternalNetworkConfiguration
     $Nodes | Add-DirectAccessDnsRecords
@@ -13,17 +12,6 @@
     $Nodes | Enable-DirectAccessCoexistenceWithThirdPartyClients
 }
 
-function Enable-CredSSPDoubleHop {
-    param (
-        [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
-    )
-    Process{
-        Enable-WSManCredSSP –Role Client –DelegateComputer $ComputerName -Force
-        Invoke-Command -ComputerName $ComputerName -ScriptBlock {
-            Enable-WSManCredSSP –Role Server -Force
-        }
-    }
-}
 
 function Add-ExternalFacingNIC {
     param (
@@ -78,7 +66,7 @@ function Set-DirectAccessConfiguration {
         $RemoteAccessConfiguration = Get-RemoteAccess -ComputerName $ComputerName
         If (($RemoteAccessConfiguration).DAStatus -eq 'Uninstalled') {
             $NIC = Invoke-Command -ComputerName $ComputerName -ScriptBlock {(Get-NetAdapter).Name}
-            Install-RemoteAccess -Force -PassThru -ServerGpoName $DirectAccessServerGpoName -ClientGpoName $DirectAccessClientGpoName -DAInstallType 'FullInstall' -InternetInterface $NIC -InternalInterface $NIC -ConnectToAddress $DirectAccessConnectToDomain -NlsUrl $DirectAccessNlsUrl -ComputerName $ComputerName
+            Install-RemoteAccess -Force -PassThru -ServerGpoName $DirectAccessServerGpoName -ClientGpoName $DirectAccessClientGpoName -DAInstallType 'FullInstall' -InternetInterface $NIC -InternalInterface $NIC -ConnectToAddress $DirectAccessConnectToDomain -NlsUrl $DirectAccessNlsUrl -ComputerName $ComputerName -DeployNat
             Add-DAClient -SecurityGroupNameList @($DirectAccessClientGroupName) -ComputerName $ComputerName
             Remove-DAClient -SecurityGroupNameList @($DomainComputersGroup) -ComputerName $ComputerName
         }
@@ -204,16 +192,23 @@ function Set-InternalNetworkConfiguration {
     )
     Begin {
         $DhcpScopes = Get-DhcpServerv4Scope -ComputerName $(Get-DhcpServerInDC | select -First 1 -ExpandProperty DNSName)
+        $ADDomain = Get-ADDomain
+        $ADNetBIOSName = ($ADDomain | Select -ExpandProperty NetBIOSName).ToLower()
+        $DomainControllers = $ADDomain | Select -ExpandProperty ReplicaDirectoryServers | Where {(Get-ADDomainController $_).Site -eq $ADNetBIOSName}
+        $DNSServerIPAddresses = @()
+        Foreach ($DomainController in $DomainControllers) {
+            $DNSServerIPAddresses += (Resolve-DnsName $DomainController)[0].IPAddress
+        }
     }
     Process {
         $CimSession = New-CimSession -ComputerName $ComputerName
         $CurrentRoutes = Get-NetRoute -CimSession $CimSession
+        $CurrentNicConfiguration = Get-NetIPConfiguration `
+            -InterfaceAlias $(Get-NetAdapter -CimSession $CimSession).Name `
+            -CimSession $CimSession
         foreach ($DhcpScope in $DhcpScopes) {
-            $CidrBits = Convert-SubnetMaskToCidr -SubnetMask ($DhcpScope).SubnetMask.ToString()
-            $CurrentNicConfiguration = Get-NetIPConfiguration `
-                -InterfaceAlias $(Get-NetAdapter -CimSession $CimSession).Name `
-                -CimSession $CimSession
             If (-NOT ($CurrentRoutes | where DestinationPrefix -Match ($DhcpScope).ScopeID.ToString())) {
+                $CidrBits = Convert-SubnetMaskToCidr -SubnetMask ($DhcpScope).SubnetMask.ToString()
                 $DestinationPrefix = ($DhcpScope).ScopeID.ToString() + '/' + $CidrBits
                 [string]$NextHop = ($CurrentNicConfiguration).IPv4DefaultGateway.NextHop
                 New-NetRoute `
@@ -225,7 +220,7 @@ function Set-InternalNetworkConfiguration {
         }
         Set-DnsClientServerAddress `
             -InterfaceAlias ($CurrentNicConfiguration).InterfaceAlias `
-            -ServerAddresses ($CurrentNicConfiguration).DNSServer.ServerAddresses `
+            -ServerAddresses $DNSServerIPAddresses `
             -CimSession $CimSession
         Invoke-Command -ComputerName $ComputerName -AsJob -ScriptBlock {
             $IPConfiguration = Get-WmiObject win32_networkadapterconfiguration | where Description -eq ($Using:CurrentNicConfiguration).InterfaceDescription
