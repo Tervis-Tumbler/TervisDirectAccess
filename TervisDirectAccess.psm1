@@ -232,3 +232,13 @@ function Set-InternalNetworkConfiguration {
         }
     }
 }
+
+function Remove-DirectAccessClientConnection {
+    param (
+        [Parameter(ValueFromPipelineByPropertyName)]$DirectAccessServerName,
+        [Parameter(ValueFromPipelineByPropertyName)]$DirectAccessClientComputerName
+
+    )
+    $CimSession = New-CimSession -ComputerName $DirectAccessServerName
+    Get-NetIPsecMainModeSA -CimSession $CimSession | where {$_.RemoteFirstID.Identity -match $DirectAccessClientComputerName} | Remove-NetIPsecMainModeSA -CimSession $CimSession
+}
