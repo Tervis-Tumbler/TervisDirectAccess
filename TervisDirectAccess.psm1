@@ -53,6 +53,7 @@ function Set-DirectAccessConfiguration {
         $ADDomain = Get-ADDomain
         $ADDNSRoot = $ADDomain | Select -ExpandProperty DNSRoot
         $ADNetBIOSName = ($ADDomain | Select -ExpandProperty NetBIOSName).ToLower()
+        $PDCEmulator = $ADDomain | Select -ExpandProperty PDCEmulator
         $DirectAccessServerGpoName = $ADDNSRoot + '\DirectAccess Server Settings'
         $DirectAccessClientGpoName = $ADDNSRoot + '\DirectAccess Client Settings'
         $DirectAccessClientGroupName = $ADDNSRoot + '\Direct Access Client Computers'
@@ -60,13 +61,13 @@ function Set-DirectAccessConfiguration {
         $DirectAccessConnectToDomain = 'DirectAccess.' + $ADNetBIOSName + '.com'
         $DirectAccessNlsDomain = 'nls.' + $ADNetBIOSName + '.com'
         $DirectAccessNlsUrl = 'https://' + $DirectAccessNlsDomain + '/'
-        $DirectAccessCorporateResources = 'HTTP:http://directaccess-WebProbeHost.' + $ADNetBIOSName + '.com'
+        $DirectAccessCorporateResources = 'HTTP:http://directaccess-WebProbeHost.' + $ADDNSRoot
     }
     Process {
         $RemoteAccessConfiguration = Get-RemoteAccess -ComputerName $ComputerName
         If (($RemoteAccessConfiguration).DAStatus -eq 'Uninstalled') {
             $NIC = Invoke-Command -ComputerName $ComputerName -ScriptBlock {(Get-NetAdapter).Name}
-            Install-RemoteAccess -Force -PassThru -ServerGpoName $DirectAccessServerGpoName -ClientGpoName $DirectAccessClientGpoName -DAInstallType 'FullInstall' -InternetInterface $NIC -InternalInterface $NIC -ConnectToAddress $DirectAccessConnectToDomain -NlsUrl $DirectAccessNlsUrl -ComputerName $ComputerName -DeployNat
+            Install-RemoteAccess -NoPrerequisite -Force -PassThru -ServerGpoName $DirectAccessServerGpoName -ClientGpoName $DirectAccessClientGpoName -DAInstallType 'FullInstall' -InternetInterface $NIC -InternalInterface $NIC -ConnectToAddress $DirectAccessConnectToDomain -DeployNat -NlsUrl $DirectAccessNlsUrl -ComputerName $ComputerName
             Add-DAClient -SecurityGroupNameList @($DirectAccessClientGroupName) -ComputerName $ComputerName
             Remove-DAClient -SecurityGroupNameList @($DomainComputersGroup) -ComputerName $ComputerName
         }
@@ -88,10 +89,18 @@ function Set-DirectAccessConfiguration {
         if (($RemoteAccessConfiguration).OnlyRemoteComputers -eq 'Enabled') {
             Set-DAClient -OnlyRemoteComputers Disabled -ComputerName $ComputerName
         }
+        
+        if (-NOT (Get-GPRegistryValue -Name 'DirectAccess Client Settings' -Key 'HKLM\Software\Policies\Microsoft\Windows NT\DNSClient' -Domain $ADDNSRoot  -ValueName 'SearchList')) {
+            Set-GPRegistryValue -Type 'String' -Value $ADDNSRoot -Name 'DirectAccess Client Settings' -Key 'HKLM\Software\Policies\Microsoft\Windows NT\DNSClient' -Domain $ADDNSRoot -ValueName 'SearchList'
+        }
+
+        if (-NOT (Get-GPRegistryValue -Name 'DirectAccess Server Settings' -Key 'HKLM\Software\Policies\Microsoft\Windows\RemoteAccess\Config' -Domain $ADDNSRoot -ValueName 'SearchList')) {
+            Set-GPRegistryValue -Type 'String' -Value $ADDNSRoot -Name 'DirectAccess Server Settings' -Key 'HKLM\Software\Policies\Microsoft\Windows\RemoteAccess\Config' -Domain $ADDNSRoot -ValueName 'SearchList' -Server $PDCEmulator
+        }
 
         $DAClientExperienceConfiguration = Get-DAClientExperienceConfiguration -PolicyStore $DirectAccessClientGpoName
         if (-NOT (($DAClientExperienceConfiguration).FriendlyName -eq 'Tervis DirectAccess Connection')) {
-            Set-DAClientExperienceConfiguration -FriendlyName 'Tervis DirectAccess Connection' -PreferLocalNamesAllowed $False -PolicyStore $Using:DirectAccessClientGpoName -CorporateResources @("$Using:DirectAccessCorporateResources")
+            Set-DAClientExperienceConfiguration -FriendlyName 'Tervis Workplace Connection' -PreferLocalNamesAllowed $True -PolicyStore $Using:DirectAccessClientGpoName -CorporateResources @("$Using:DirectAccessCorporateResources")
         }
     }
 }
@@ -237,8 +246,24 @@ function Remove-DirectAccessClientConnection {
     param (
         [Parameter(ValueFromPipelineByPropertyName)]$DirectAccessServerName,
         [Parameter(ValueFromPipelineByPropertyName)]$DirectAccessClientComputerName
-
     )
     $CimSession = New-CimSession -ComputerName $DirectAccessServerName
     Get-NetIPsecMainModeSA -CimSession $CimSession | where {$_.RemoteFirstID.Identity -match $DirectAccessClientComputerName} | Remove-NetIPsecMainModeSA -CimSession $CimSession
+}
+
+function Start-DirectAccessTrace {
+    param ([Parameter(ValueFromPipelineByPropertyName)]$ComputerName)
+    Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+        netsh trace start scenario=directaccess report=yes capture=yes tracefile="$env:temp\DirectAccessTrace.etl"
+        netsh wfp capture start file="$env:temp\wfpcap.cab"
+        Get-NetAdapter | Restart-NetAdapter
+    }
+}
+
+function Stop-DirectAccessTrace {
+    param ([Parameter(ValueFromPipelineByPropertyName)]$ComputerName)
+    Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+        netsh wfp capture stop
+        netsh trace stop
+    }
 }
