@@ -216,6 +216,9 @@ function Set-InternalNetworkConfiguration {
         $CurrentNicConfiguration = Get-NetIPConfiguration `
             -InterfaceAlias $(Get-NetAdapter -CimSession $CimSession).Name `
             -CimSession $CimSession
+        $InterfaceName = $CurrentNicConfiguration | Select -ExpandProperty InterfaceAlias
+        $IPAddress = ($CurrentNicConfiguration).IPv4Address.IPAddress
+        $DefaultGateway = ($CurrentNicConfiguration).IPv4DefaultGateway.NextHop
         foreach ($DhcpScope in $DhcpScopes) {
             If (-NOT ($CurrentRoutes | where DestinationPrefix -Match ($DhcpScope).ScopeID.ToString())) {
                 $CidrBits = Convert-SubnetMaskToCidr -SubnetMask ($DhcpScope).SubnetMask.ToString()
@@ -232,15 +235,11 @@ function Set-InternalNetworkConfiguration {
             -InterfaceAlias ($CurrentNicConfiguration).InterfaceAlias `
             -ServerAddresses $DNSServerIPAddresses `
             -CimSession $CimSession
-        Invoke-Command -ComputerName $ComputerName -AsJob -ScriptBlock {
-            $IPConfiguration = Get-WmiObject win32_networkadapterconfiguration | where Description -eq ($Using:CurrentNicConfiguration).InterfaceDescription
-            $IPAddress = ($Using:CurrentNicConfiguration).IPv4Address.IPAddress
-            $SubnetMask = ($IPConfiguration).IPSubnet[0]
-            $DefaultGateway = ($Using:CurrentNicConfiguration).IPv4DefaultGateway.NextHop
-            $IPConfiguration.EnableStatic($IPAddress, $SubnetMask)
-            $IPConfiguration.SetGateways($DefaultGateway, 1)
-            $IPConfiguration.SetDNSDomain($Using:ADDNSRoot)
-        }
+        $IPConfiguration = Get-WmiObject win32_networkadapterconfiguration -ComputerName $ComputerName | where Description -eq ($CurrentNicConfiguration).InterfaceDescription
+        $SubnetMask = ($IPConfiguration).IPSubnet[0]
+        $IPConfiguration.SetDNSDomain($ADDNSRoot)
+        $IPConfiguration.SetDynamicDNSRegistration($true)
+        Invoke-Command -ComputerName $ComputerName -AsJob -ScriptBlock {netsh interface ip set address $Using:InterfaceName static $Using:IPAddress $Using:SubnetMask $Using:DefaultGateway 1}
     }
     End {
         Remove-CimSession $CimSession
