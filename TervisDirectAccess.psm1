@@ -234,11 +234,14 @@ function Set-InternalNetworkConfiguration {
         Invoke-Command -ComputerName $ComputerName -AsJob -ScriptBlock {
             $IPConfiguration = Get-WmiObject win32_networkadapterconfiguration | where Description -eq ($Using:CurrentNicConfiguration).InterfaceDescription
             $IPAddress = ($Using:CurrentNicConfiguration).IPv4Address.IPAddress
-            $SubnetMask = ($WMI).IPSubnet[0]
+            $SubnetMask = ($IPConfiguration).IPSubnet[0]
             $DefaultGateway = ($Using:CurrentNicConfiguration).IPv4DefaultGateway.NextHop
             $IPConfiguration.EnableStatic($IPAddress, $SubnetMask)
             $IPConfiguration.SetGateways($DefaultGateway, 1)
         }
+    }
+    End {
+        Remove-CimSession $CimSession
     }
 }
 
@@ -247,8 +250,15 @@ function Remove-DirectAccessClientConnection {
         [Parameter(ValueFromPipelineByPropertyName)]$DirectAccessServerName,
         [Parameter(ValueFromPipelineByPropertyName)]$DirectAccessClientComputerName
     )
-    $CimSession = New-CimSession -ComputerName $DirectAccessServerName
-    Get-NetIPsecMainModeSA -CimSession $CimSession | where {$_.RemoteFirstID.Identity -match $DirectAccessClientComputerName} | Remove-NetIPsecMainModeSA -CimSession $CimSession
+    Begin {
+        $CimSession = New-CimSession -ComputerName $DirectAccessServerName
+    }
+    Process {
+        Get-NetIPsecMainModeSA -CimSession $CimSession | where {$_.RemoteFirstID.Identity -match $DirectAccessClientComputerName} | Remove-NetIPsecMainModeSA -CimSession $CimSession
+    }
+    End {
+        Remove-CimSession $CimSession
+    }
 }
 
 function Start-DirectAccessTrace {
