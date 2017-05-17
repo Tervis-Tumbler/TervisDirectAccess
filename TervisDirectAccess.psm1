@@ -202,6 +202,7 @@ function Set-InternalNetworkConfiguration {
     Begin {
         $DhcpScopes = Get-DhcpServerv4Scope -ComputerName $(Get-DhcpServerInDC | select -First 1 -ExpandProperty DNSName)
         $ADDomain = Get-ADDomain
+        $ADDNSRoot = $ADDomain | Select -ExpandProperty DNSRoot
         $ADNetBIOSName = ($ADDomain | Select -ExpandProperty NetBIOSName).ToLower()
         $DomainControllers = $ADDomain | Select -ExpandProperty ReplicaDirectoryServers | Where {(Get-ADDomainController $_).Site -eq $ADNetBIOSName}
         $DNSServerIPAddresses = @()
@@ -238,6 +239,7 @@ function Set-InternalNetworkConfiguration {
             $DefaultGateway = ($Using:CurrentNicConfiguration).IPv4DefaultGateway.NextHop
             $IPConfiguration.EnableStatic($IPAddress, $SubnetMask)
             $IPConfiguration.SetGateways($DefaultGateway, 1)
+            $IPConfiguration.SetDNSDomain($Using:ADDNSRoot)
         }
     }
     End {
