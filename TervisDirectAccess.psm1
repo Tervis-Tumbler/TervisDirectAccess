@@ -53,6 +53,7 @@ function Set-DirectAccessConfiguration {
         $ADDomain = Get-ADDomain
         $ADDNSRoot = $ADDomain | Select -ExpandProperty DNSRoot
         $ADNetBIOSName = ($ADDomain | Select -ExpandProperty NetBIOSName).ToLower()
+        $ExternalDomainSuffix = $ADNetBIOSName + '.com'
         $PDCEmulator = $ADDomain | Select -ExpandProperty PDCEmulator
         $DirectAccessServerGpoName = $ADDNSRoot + '\DirectAccess Server Settings'
         $DirectAccessClientGpoName = $ADDNSRoot + '\DirectAccess Client Settings'
@@ -66,6 +67,12 @@ function Set-DirectAccessConfiguration {
     Process {
         $RemoteAccessConfiguration = Get-RemoteAccess -ComputerName $ComputerName
         If (($RemoteAccessConfiguration).DAStatus -eq 'Uninstalled') {
+            if (Get-GPO 'DirectAccess Server Settings' -ErrorAction SilentlyContinue){
+                Remove-GPO 'DirectAccess Server Settings'
+            }
+            if (Get-GPO 'DirectAccess Client Settings' -ErrorAction SilentlyContinue){
+                Remove-GPO 'DirectAccess Client Settings'
+            }
             $NIC = Invoke-Command -ComputerName $ComputerName -ScriptBlock {(Get-NetAdapter).Name}
             Install-RemoteAccess -NoPrerequisite -Force -PassThru -ServerGpoName $DirectAccessServerGpoName -ClientGpoName $DirectAccessClientGpoName -DAInstallType 'FullInstall' -InternetInterface $NIC -InternalInterface $NIC -ConnectToAddress $DirectAccessConnectToDomain -DeployNat -NlsUrl $DirectAccessNlsUrl -ComputerName $ComputerName
             Add-DAClient -SecurityGroupNameList @($DirectAccessClientGroupName) -ComputerName $ComputerName
@@ -101,6 +108,37 @@ function Set-DirectAccessConfiguration {
         $DAClientExperienceConfiguration = Get-DAClientExperienceConfiguration -PolicyStore $DirectAccessClientGpoName
         if (-NOT (($DAClientExperienceConfiguration).FriendlyName -eq 'Tervis DirectAccess Connection')) {
             Set-DAClientExperienceConfiguration -FriendlyName 'Tervis Workplace Connection' -PreferLocalNamesAllowed $True -PolicyStore $Using:DirectAccessClientGpoName -CorporateResources @("$Using:DirectAccessCorporateResources")
+        }
+
+        $NrptRootDomain = '.' + $ADDNSRoot
+        $DirectAccessDnsServers = Get-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' | Where Namespace -eq $NrptRootDomain | Select -ExpandProperty DirectAccessDnsServers | Select -ExpandProperty IPAddressToString
+        $ExternalARecords = Get-DnsServerResourceRecord -ComputerName $PDCEmulator -ZoneName $ExternalDomainSuffix -RRType A | where {$_.RecordData.IPv4Address.IPAddressToString -NotMatch "^10."}
+        Foreach ($ExternalARecord in $ExternalARecords) {
+            if (($ExternalARecord).HostName -eq '@') {
+                $NameSpace = '.' + $ExternalDomainSuffix
+                if (-NOT (Get-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' | Where Namespace -eq $NameSpace)) {
+                    Add-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' -Namespace $NameSpace -DAProxyType 'NoProxy' -DANameServers $DirectAccessDnsServers -DAEnable
+                }
+            } else {
+                $NameSpace = ($ExternalARecord).HostName + '.' + $ExternalDomainSuffix
+                if (-NOT (Get-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' | Where Namespace -eq $NameSpace)) {
+                    Add-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' -Namespace $NameSpace -DAProxyType 'UseDefault' -DAEnable
+                }
+            }
+            Add-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' -Namespace ($ExternalARecord).HostName
+        }
+        $ExternalCNameRecords = Get-DnsServerResourceRecord -ComputerName $PDCEmulator -ZoneName $ExternalDomainSuffix -RRType CName | where {$_.RecordData.HostNameAlias -NotMatch "$ExternalDomainSuffix.$" -and $_.RecordData.HostNameAlias -NotMatch "$ADDNSRoot.$"}
+        Foreach ($ExternalCNameRecord in $ExternalCNameRecords) {
+                $NameSpace = ($ExternalCNameRecord).HostName + '.' + $ExternalDomainSuffix
+                if (-NOT (Get-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' | Where Namespace -eq $NameSpace)) {
+                    Add-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' -Namespace $NameSpace -DAProxyType 'UseDefault' -DAEnable
+                }
+        }
+        $NrptExclusionList = Get-PasswordstateDirectAccessDetails -PasswordID 4114 | Select -ExpandProperty NrptExclusionList
+        foreach ($NrptExclusion in $NrptExclusionList) {
+            if (-NOT (Get-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' | Where Namespace -eq $NrptExclusion)) {
+                Add-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' -Namespace $NrptExclusion -DAProxyType 'UseDefault' -DAEnable
+            }
         }
     }
 }
@@ -219,6 +257,7 @@ function Set-InternalNetworkConfiguration {
         $InterfaceName = $CurrentNicConfiguration | Select -ExpandProperty InterfaceAlias
         $IPAddress = ($CurrentNicConfiguration).IPv4Address.IPAddress
         $DefaultGateway = ($CurrentNicConfiguration).IPv4DefaultGateway.NextHop
+        <#
         foreach ($DhcpScope in $DhcpScopes) {
             If (-NOT ($CurrentRoutes | where DestinationPrefix -Match ($DhcpScope).ScopeID.ToString())) {
                 $CidrBits = Convert-SubnetMaskToCidr -SubnetMask ($DhcpScope).SubnetMask.ToString()
@@ -231,6 +270,7 @@ function Set-InternalNetworkConfiguration {
                     -CimSession $CimSession
             }
         }
+        #>
         Set-DnsClientServerAddress `
             -InterfaceAlias ($CurrentNicConfiguration).InterfaceAlias `
             -ServerAddresses $DNSServerIPAddresses `
