@@ -47,6 +47,7 @@ function Set-DirectAccessConfiguration {
     [cmdletbinding()]
     param (
         [Parameter(ValueFromPipelineByPropertyName)]$ComputerName,
+        [Parameter(ValueFromPipelineByPropertyName)]$LocalAdminPasswordStateID,
         $Credential = [System.Management.Automation.PSCredential]::Empty
     )
     Begin {
@@ -134,7 +135,7 @@ function Set-DirectAccessConfiguration {
                     Add-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' -Namespace $NameSpace -DAProxyType 'UseDefault' -DAEnable
                 }
         }
-        $NrptExclusionList = Get-PasswordstateDirectAccessDetails -PasswordID 4114 | Select -ExpandProperty NrptExclusionList
+        $NrptExclusionList = Get-PasswordstateDirectAccessDetails -PasswordID $LocalAdminPasswordStateID | Select -ExpandProperty NrptExclusionList
         foreach ($NrptExclusion in $NrptExclusionList) {
             if (-NOT (Get-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' | Where Namespace -eq $NrptExclusion)) {
                 Add-DnsClientNrptRule -GpoName 'DirectAccess Client Settings' -Namespace $NrptExclusion -DAProxyType 'UseDefault' -DAEnable
