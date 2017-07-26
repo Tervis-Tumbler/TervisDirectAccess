@@ -2,8 +2,8 @@
     param (
         $EnvironmentName
     )
-    Invoke-ClusterApplicationProvision -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
-    $Nodes = Get-TervisClusterApplicationNode -ClusterApplicationName DirectAccess -EnvironmentName $EnvironmentName
+    Invoke-ApplicationProvision -ApplicationName DirectAccess -EnvironmentName $EnvironmentName
+    $Nodes = Get-TervisApplicationNode -ApplicationName DirectAccess -EnvironmentName $EnvironmentName
     # $Nodes | Add-ExternalFacingNIC
     $Nodes | Set-InternalNetworkConfiguration
     $Nodes | Add-DirectAccessDnsRecords
