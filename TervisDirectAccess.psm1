@@ -213,8 +213,8 @@ function Install-DirectAccessCertificates {
             Copy-Item "C:\Temp\Wildcard.pfx" -Destination "\\$ComputerName\C$\Temp\Wildcard.pfx"
             Invoke-Command -ComputerName $ComputerName -ScriptBlock {
                 Import-PfxCertificate -FilePath "C:\Temp\Wildcard.pfx" -Password $Using:WildcardCredential -CertStoreLocation "cert:\localMachine\my"
-                $cert = Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.FriendlyName -eq '*.tervis.com' -and $_.Issuer -match 'CN=DigiCert'}
-                Set-RemoteAccess -SslCertificate $cert
+                $Certificate = Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.Thumbprint -eq '5762516552DBFA552CF9C502940F98EAF8FE817B'} 
+                Set-RemoteAccess -SslCertificate $Certificate
                 Remove-Item "C:\Temp\Wildcard.pfx" -Confirm:$false
                 Restart-Service -Name iphlpsvc -Force
             }
