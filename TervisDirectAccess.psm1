@@ -197,11 +197,11 @@ function Install-DirectAccessCertificates {
         [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
     )
     Begin {
-        $WildcardCredential = ConvertTo-SecureString (Get-PasswordstateCredential -PasswordID '2570' -AsPlainText).Password -AsPlainText -Force
+        $WildcardCredential = ConvertTo-SecureString (Get-PasswordstateCredential -PasswordID '4335' -AsPlainText).Password -AsPlainText -Force
         if (-NOT (Test-Path "C:\Temp")) {
             New-Item "C:\Temp" -ItemType Directory
         }
-        Get-PasswordstateDocument -DocumentID '3' -FilePath "C:\Temp\Wildcard.pfx"
+        Get-PasswordstateDocument -DocumentID '11' -FilePath "C:\Temp\Wildcard.pfx"
     }
     Process {
         Invoke-Command -ComputerName $ComputerName -ScriptBlock {
@@ -209,11 +209,11 @@ function Install-DirectAccessCertificates {
                 New-Item "C:\Temp" -ItemType Directory
             }
         }
-        if (-NOT (Invoke-Command -ComputerName $ComputerName -ScriptBlock {Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.FriendlyName -eq '*.tervis.com' -and $_.Issuer -match 'CN=Go Daddy'}})) {
+        if (-NOT (Invoke-Command -ComputerName $ComputerName -ScriptBlock {Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.FriendlyName -eq '*.tervis.com' -and $_.Issuer -match 'CN=DigiCert'}})) {
             Copy-Item "C:\Temp\Wildcard.pfx" -Destination "\\$ComputerName\C$\Temp\Wildcard.pfx"
             Invoke-Command -ComputerName $ComputerName -ScriptBlock {
                 Import-PfxCertificate -FilePath "C:\Temp\Wildcard.pfx" -Password $Using:WildcardCredential -CertStoreLocation "cert:\localMachine\my"
-                $cert = Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.FriendlyName -eq '*.tervis.com' -and $_.Issuer -match 'CN=Go Daddy'}
+                $cert = Get-ChildItem -Path cert:\localmachine\my | Where-Object {$_.FriendlyName -eq '*.tervis.com' -and $_.Issuer -match 'CN=DigiCert'}
                 Set-RemoteAccess -SslCertificate $cert
                 Remove-Item "C:\Temp\Wildcard.pfx" -Confirm:$false
                 Restart-Service -Name iphlpsvc -Force
