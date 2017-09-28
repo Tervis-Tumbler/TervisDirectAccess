@@ -221,7 +221,9 @@ function Install-DirectAccessCertificates {
         }
     }
     End {
-        Remove-Item "C:\Temp\Wildcard.pfx" -Confirm:$false
+        if (Test-Path -Path "C:\Temp\Wildcard.pfx") {
+            Remove-Item "C:\Temp\Wildcard.pfx" -Confirm:$false
+        }
     }
 }
 
