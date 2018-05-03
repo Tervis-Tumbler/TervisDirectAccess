@@ -201,7 +201,7 @@ function Install-DirectAccessCertificates {
         if (-NOT (Test-Path "C:\Temp")) {
             New-Item "C:\Temp" -ItemType Directory
         }
-        Get-PasswordstateDocument -DocumentID '11' -FilePath "C:\Temp\Wildcard.pfx"
+        TervisPasswordstatePowershell\Get-PasswordstateDocument -DocumentID '11' -FilePath "C:\Temp\Wildcard.pfx"
     }
     Process {
         Invoke-Command -ComputerName $ComputerName -ScriptBlock {
