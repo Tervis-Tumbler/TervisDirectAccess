@@ -197,7 +197,7 @@ function Install-DirectAccessCertificates {
         [Parameter(ValueFromPipelineByPropertyName)]$ComputerName
     )
     Begin {
-        $WildcardCredential = ConvertTo-SecureString (Get-PasswordstateCredential -PasswordID '4335' -AsPlainText).Password -AsPlainText -Force
+        $WildcardCredential = ConvertTo-SecureString (Get-PasswordstatePassword -ID 4335).Password -AsPlainText -Force
         if (-NOT (Test-Path "C:\Temp")) {
             New-Item "C:\Temp" -ItemType Directory
         }
